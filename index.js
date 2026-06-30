@@ -45,7 +45,7 @@ const convertFtC = tool(
     },
     {
         name: 'convertFtC',
-        description: 'Convert from Fahrenheit to Celsius USING THE SUBTRACT AND MULTIPLY TOOL.',
+        description: 'Convert from Fahrenheit to Celsius',
         schema: z.object({
             a: z.number().describe('The temperature in Fahrenheit'),
         }),
@@ -55,14 +55,81 @@ const convertFtC = tool(
 const getCoordinates = tool(
     async ({ location }) => {
         console.log(`[tool called] getCoordinates(${location})`);
-        if (location.toLowerCase().includes('santa cruz')) {
-            return JSON.stringify({ latitude: 36.9741, longitude: -122.0308 });
+
+        const buildQueries = (raw) => {
+            const queries = new Set();
+            const cleaned = raw.trim();
+            if (!cleaned) return [];
+
+            queries.add(cleaned);
+            queries.add(cleaned.replace(/,/g, ' ').replace(/\s+/g, ' ').trim());
+            queries.add(cleaned.replace(/[,.-]/g, ' ').replace(/\s+/g, ' ').trim());
+
+            const parts = cleaned.split(',').map((part) => part.trim()).filter(Boolean);
+            if (parts.length > 1) {
+                queries.add(parts.join(' '));
+                queries.add(parts[0]);
+                queries.add(`${parts[0]} ${parts[1]}`);
+            }
+
+            return [...queries].filter(Boolean);
+        };
+
+        const formatResult = (result, source) => {
+            const name = result.name || result.display_name || 'Unknown location';
+            const latitude = result.latitude ?? result.lat;
+            const longitude = result.longitude ?? result.lon;
+            const country = result.country || result.address?.country || '';
+            const admin1 = result.admin1 || result.address?.state || result.address?.city || '';
+            const locationLabel = [name, admin1, country].filter(Boolean).join(', ');
+            return `Source: ${source} | Latitude: ${latitude}, Longitude: ${longitude}, Location: ${locationLabel}`;
+        };
+
+        const tryOpenMeteo = async (query) => {
+            const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=3&language=en&format=json`;
+            const res = await fetch(url);
+            if (!res.ok) return null;
+            const data = await res.json();
+            return data.results?.[0] || null;
+        };
+
+        const tryNominatim = async (query) => {
+            const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(query)}`;
+            const res = await fetch(url, {
+                headers: {
+                    'Accept-Language': 'en',
+                    'User-Agent': 'langtools/1.0',
+                },
+            });
+            if (!res.ok) return null;
+            const data = await res.json();
+            if (!data?.[0]) return null;
+            return {
+                name: data[0].display_name,
+                latitude: parseFloat(data[0].lat),
+                longitude: parseFloat(data[0].lon),
+                country: data[0].address?.country,
+                address: data[0].address,
+            };
+        };
+
+        for (const query of buildQueries(location)) {
+            const openMeteoResult = await tryOpenMeteo(query);
+            if (openMeteoResult) {
+                return formatResult(openMeteoResult, 'Open-Meteo');
+            }
+
+            const nominatimResult = await tryNominatim(query);
+            if (nominatimResult) {
+                return formatResult(nominatimResult, 'Nominatim');
+            }
         }
-        return JSON.stringify({ latitude: 0, longitude: 0 });
+
+        return `No coordinates found for "${location}".`;
     },
     {
         name: 'getCoordinates',
-        description: 'Get latitude and longitude for a given city/location string.',
+        description: 'Get latitude and longitude for any city, town, or location string.',
         schema: z.object({
             location: z.string().describe('The city and state/country, e.g., "Santa Cruz, CA"'),
         }),
@@ -99,7 +166,7 @@ const modelWithTools = model.bindTools(tools, { parallel_tool_calls: false });
 
 (async () => {
     const messages = [new HumanMessage(
-        `You must execute your thoughts strictly step-by-step. Use getCoordinates to look up "Santa Cruz, CA". Stop and wait for the tool output. + Step 2: Use those coordinates to call getWeather. Stop and wait for the tool output. Step 3: Take that Fahrenheit temperature and convert it using convertFtC .`
+        `You must execute your thoughts strictly step-by-step. Use getCoordinates to look up "San Leandro, CA". Stop and wait for the tool output. Use those coordinates to call getWeather. Stop and wait for the tool output. Take that Fahrenheit temperature and convert it using convertFtC .`
     )];
 
     var response = await modelWithTools.invoke(messages);
