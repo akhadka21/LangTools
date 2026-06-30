@@ -1,4 +1,5 @@
 {
+  "type": "module",
   "dependencies": {
     "@langchain/core": "^1.2.1",
     "@langchain/openrouter": "^0.4.3",
